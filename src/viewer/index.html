@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>House viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #eef1f5; }
+  canvas { display: block; }
+  #info { position: fixed; top: 12px; left: 12px; padding: 10px 14px; border-radius: 6px;
+    background: rgba(255,255,255,.9); color: #1d2430; font: 14px/1.5 system-ui, sans-serif;
+    box-shadow: 0 1px 4px rgba(0,0,0,.2); max-width: 320px; }
+  #info b { font-weight: 600; }
+  #info .hint { margin-top: 6px; color: #667; font-size: 12px; }
+  #info .err { color: #b00020; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="info"><div id="spec">Loading model…</div><div class="hint">drag to orbit · scroll to zoom</div></div>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const specEl = document.getElementById("spec");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef1f5);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2);
+sun.position.set(60, 100, 40);
+scene.add(sun);
+scene.add(new THREE.GridHelper(200, 40, 0x888888, 0xcccccc)); // y = 0, 200 ft, 5 ft cells
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 5000);
+camera.position.set(60, 50, 80);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+function frame(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const r = Math.max(size.length() / 2, 1);
+  const dist = r / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
+  camera.position.copy(center).add(new THREE.Vector3(0.7, 0.55, 0.9).normalize().multiplyScalar(dist));
+  camera.near = dist / 100;
+  camera.far = dist * 20;
+  camera.updateProjectionMatrix();
+  controls.target.copy(center);
+  controls.update();
+}
+
+function showSpec(spec) {
+  specEl.textContent = "";
+  if (!spec) { specEl.textContent = "No spec in model"; return; }
+  for (const [label, value] of Object.entries(spec)) {
+    const row = document.createElement("div");
+    const b = document.createElement("b");
+    b.textContent = String(value ?? "?");
+    row.append(label + ": ", b);
+    specEl.appendChild(row);
+  }
+}
+
+new GLTFLoader().load(
+  "/model.gltf",
+  (gltf) => {
+    gltf.scene.traverse((o) => {
+      if (o.isMesh) {
+        o.add(new THREE.LineSegments(new THREE.EdgesGeometry(o.geometry),
+          new THREE.LineBasicMaterial({ color: 0x333333 })));
+      }
+    });
+    scene.add(gltf.scene);
+    showSpec(gltf.parser.json.extras?.spec);
+    frame(gltf.scene);
+  },
+  undefined,
+  (err) => {
+    specEl.textContent = "";
+    const e = document.createElement("div");
+    e.className = "err";
+    e.textContent = "Failed to load /model.gltf: " + (err?.message ?? err);
+    specEl.appendChild(e);
+  }
+);
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

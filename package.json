@@ -1,0 +1,18 @@
+{
+  "name": "house-proto",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Proof-of-concept: turn sqft/bedrooms/floors into a rough 3D house massing",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
