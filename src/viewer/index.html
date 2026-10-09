@@ -237,26 +237,33 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   refresh();
 });
 
-// ---- editing: POST /layout, swap model ----
+// ---- editing: POST /layout (or in-page layoutToGltf in static mode), swap model ----
 const parseGltf = (json) => new Promise((ok, fail) => new GLTFLoader().parse(JSON.stringify(json), "", ok, fail));
 
-// POST /layout and swap the model. Returns true on success; on failure shows the error and returns false.
+// POST /layout (or call layoutToGltf) and swap the model. Returns true on success; on failure shows the error and returns false.
 async function relayout(nextSpec, nextOverrides, { reframe = false } = {}) {
   busy = true;
   refresh();
   showError("");
   try {
-    const res = await fetch("/layout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ spec: nextSpec, overrides: nextOverrides }),
-    });
-    if (!res.ok) {
-      let msg = `HTTP ${res.status}`;
-      try { msg = (await res.json()).error ?? msg; } catch {}
-      throw new Error(msg);
+    let json;
+    if (globalThis.layoutToGltf) {
+      // Static mode (docs/): layout runs in the page; a thrown Error reads like a 4xx error from the server.
+      json = globalThis.layoutToGltf({ spec: nextSpec, overrides: nextOverrides });
+    } else {
+      const res = await fetch("/layout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spec: nextSpec, overrides: nextOverrides }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json()).error ?? msg; } catch {}
+        throw new Error(msg);
+      }
+      json = await res.json();
     }
-    const gltf = await parseGltf(await res.json());
+    const gltf = await parseGltf(json);
     overrides = gltf.parser.json.extras?.applied ?? nextOverrides;
     if (reframe) selectedId = null;
     adoptModel(gltf); // per-room edits keep camera and re-select id if it still exists
@@ -295,18 +302,28 @@ sqftEl.addEventListener("change", submitEdit);
 floorEl.addEventListener("change", submitEdit);
 
 // ---- initial load ----
-new GLTFLoader().load(
-  "/model.gltf",
-  (gltf) => {
-    overrides = gltf.parser.json.extras?.applied ?? {};
-    adoptModel(gltf);
-    frame(group);
-  },
-  undefined,
-  (err) => {
-    showError("Failed to load /model.gltf: " + (err?.message ?? err));
+const showInitial = (gltf) => {
+  overrides = gltf.parser.json.extras?.applied ?? {};
+  adoptModel(gltf);
+  frame(group);
+};
+if (globalThis.layoutToGltf) {
+  // Static mode (docs/): compute the default house in the page.
+  try {
+    showInitial(await parseGltf(globalThis.layoutToGltf({ spec: {} })));
+  } catch (err) {
+    showError("Failed to build model: " + (err?.message ?? err));
   }
-);
+} else {
+  new GLTFLoader().load(
+    "/model.gltf",
+    showInitial,
+    undefined,
+    (err) => {
+      showError("Failed to load /model.gltf: " + (err?.message ?? err));
+    }
+  );
+}
 
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;

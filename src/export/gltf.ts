@@ -32,10 +32,25 @@ const NORMAL_BYTES = 24 * 3 * 4;
 const INDEX_BYTES = 36 * 2;
 const BOX_BYTES = POSITION_BYTES + NORMAL_BYTES + INDEX_BYTES; // all 4-byte aligned
 
+// Portable base64 (no Node Buffer): the exporter also runs in the browser build.
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function toBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i] as number, b = bytes[i + 1], c = bytes[i + 2];
+    const n = (a << 16) | ((b ?? 0) << 8) | (c ?? 0);
+    out += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]!;
+    out += b === undefined ? '=' : B64[(n >> 6) & 63]!;
+    out += c === undefined ? '=' : B64[n & 63]!;
+  }
+  return out;
+}
+
 export function toGltf(m: Massing): object {
   const placed = m.floors.flatMap((f) => f.rooms.map((box) => ({ box, level: f.level })));
   const boxes: Box[] = placed.map((p) => p.box);
-  const buffer = Buffer.alloc(boxes.length * BOX_BYTES);
+  const bytes = new Uint8Array(boxes.length * BOX_BYTES);
+  const view = new DataView(bytes.buffer);
 
   const accessors: object[] = [];
   const bufferViews: object[] = [];
@@ -55,18 +70,18 @@ export function toGltf(m: Massing): object {
       for (const corner of face.c) {
         for (let a = 0; a < 3; a++) {
           const v = Math.fround((corner[a] as number) * (dims[a] as number));
-          buffer.writeFloatLE(v, pOff);
+          view.setFloat32(pOff, v, true);
           pOff += 4;
           if (v < (min[a] as number)) min[a] = v;
           if (v > (max[a] as number)) max[a] = v;
         }
         for (let a = 0; a < 3; a++) {
-          buffer.writeFloatLE(face.n[a] as number, nOff);
+          view.setFloat32(nOff, face.n[a] as number, true);
           nOff += 4;
         }
       }
       for (const k of [0, 1, 2, 0, 2, 3]) {
-        buffer.writeUInt16LE(fi * 4 + k, iOff);
+        view.setUint16(iOff, fi * 4 + k, true);
         iOff += 2;
       }
     });
@@ -113,8 +128,8 @@ export function toGltf(m: Massing): object {
     bufferViews,
     buffers: [
       {
-        byteLength: buffer.length,
-        uri: `data:application/octet-stream;base64,${buffer.toString('base64')}`,
+        byteLength: bytes.length,
+        uri: `data:application/octet-stream;base64,${toBase64(bytes)}`,
       },
     ],
   };

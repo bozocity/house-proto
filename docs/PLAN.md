@@ -63,9 +63,16 @@ src/
   export/gltf.ts    Massing → glTF JSON (pure)
   serve.ts          static server for viewer + out/, returns URL
   viewer/index.html three.js viewer (CDN importmap, no bundler)
+  browser-entry.ts esbuild entry: exposes layoutToGltf as a global (static build)
+scripts/build.ts    npm run build -> docs/index.html + docs/layout.js
 test/               Vitest: massing + gltf
 out/                generated model.gltf (gitignored)
 ```
+
+Static mode: `npm run build` (scripts/build.ts, esbuild) bundles layout.ts to `docs/layout.js`, which sets
+`globalThis.layoutToGltf`, and copies the viewer to `docs/index.html` with that script injected before the main
+module. When the global exists the viewer lays out in-page (no `/layout` or `/model.gltf`); otherwise it uses the
+server. `docs/` is committed and served by GitHub Pages from main:/docs.
 
 Toolchain: Node 24 (nvm, `.nvmrc`), TypeScript, `tsx` to run, Vitest, npm.
 No framework, no bundler.

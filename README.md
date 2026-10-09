@@ -20,4 +20,6 @@ viewer in your browser (drag to orbit, scroll to zoom). Add `--no-open` to
 only write the file. `npm test` runs the layout tests; `npm run typecheck`
 runs the compiler.
 
+A no-install version is published at https://bozocity.github.io/house-proto/ (built with `npm run build` into `docs/`).
+
 Design and roadmap: [docs/PLAN.md](docs/PLAN.md).

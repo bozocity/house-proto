@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>House viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #eef1f5; }
+  canvas { display: block; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; box-sizing: border-box; padding: 0 16px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; z-index: 2;
+    background: #f7f8fa; border-bottom: 1px solid #d5d9e0; color: #1d2430; font: 14px system-ui, sans-serif; }
+  #sel, #house { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  #label { font-weight: 600; }
+  #sel input, #sel select, #house input, #house select { font: inherit; padding: 3px 6px; border: 1px solid #b8bec9; border-radius: 4px; background: #fff; }
+  #sel input { width: 80px; }
+  #h-sqft { width: 80px; }
+  #h-bedrooms { width: 56px; }
+  #house input:disabled, #house select:disabled, #sel input:disabled, #sel select:disabled { background: #eceef2; color: #667; }
+  #err { color: #b00020; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  #hint { position: fixed; left: 12px; bottom: 10px; color: #667; font: 12px system-ui, sans-serif; pointer-events: none; }
+  [hidden] { display: none !important; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="bar">
+  <div id="house">
+    <input id="h-sqft" type="number" step="100" min="300" max="20000" title="Square feet"> sqft
+    <input id="h-bedrooms" type="number" step="1" min="0" max="12" title="Bedrooms"> bed
+    <select id="h-floors" title="Floors">
+      <option value="1">1 floor</option><option value="2">2 floors</option><option value="3">3 floors</option><option value="4">4 floors</option>
+    </select>
+    <select id="h-style" title="Style">
+      <option value="ranch">Ranch</option><option value="colonial">Colonial</option><option value="modern">Modern</option>
+    </select>
+  </div>
+  <div id="sel">
+    <span id="err"></span>
+    <span id="label">Click a room</span>
+    <span id="controls" hidden>
+      <input id="sqft" type="number" step="10" min="40" title="Square feet"> sqft
+      <select id="floor" title="Floor"></select>
+    </span>
+  </div>
+</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
+<script type="module" src="./layout.js"></script>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const $ = (id) => document.getElementById(id);
+const hSqftEl = $("h-sqft"), hBedsEl = $("h-bedrooms"), hFloorsEl = $("h-floors"), hStyleEl = $("h-style");
+const houseEls = [hSqftEl, hBedsEl, hFloorsEl, hStyleEl];
+const errEl = $("err"), labelEl = $("label");
+const controlsEl = $("controls"), sqftEl = $("sqft"), floorEl = $("floor");
+
+const FACE_OPACITY = 0.35, SELECTED_OPACITY = 0.55;
+const ROOF_COLOR = 0x6b5d52, ROOF_OPACITY = 0.6;
+const EDGE_COLOR = 0x000000, SELECTED_EDGE_COLOR = 0xff8800;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef1f5);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2);
+sun.position.set(60, 100, 40);
+scene.add(sun);
+scene.add(new THREE.GridHelper(200, 40, 0x888888, 0xcccccc)); // y = 0, 200 ft, 5 ft cells
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 5000);
+camera.position.set(60, 50, 80);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+function frame(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const r = Math.max(size.length() / 2, 1);
+  const dist = r / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
+  camera.position.copy(center).add(new THREE.Vector3(0.7, 0.55, 0.9).normalize().multiplyScalar(dist));
+  camera.near = dist / 100;
+  camera.far = dist * 20;
+  camera.updateProjectionMatrix();
+  controls.target.copy(center);
+  controls.update();
+}
+
+// ---- state ----
+let group = null;          // current model root (gltf.scene)
+let boxes = [];            // [{ id, ud, mesh, edgeMat }]
+let spec = null;           // root extras.spec
+let overrides = {};        // in memory only; replaced by root extras.applied after each layout
+let selectedId = null;
+let busy = false;
+
+const noRaycast = () => {};
+const bedMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.9 }); // opaque, shared, never disposed
+
+// Rough bed: mattress + headboard, centered in the mesh's footprint, resting on its floor, long axis along the longer side.
+function makeBed(geom) {
+  geom.computeBoundingBox();
+  const bb = geom.boundingBox, w = bb.max.x - bb.min.x, d = bb.max.z - bb.min.z;
+  const long = Math.max(w, d), short = Math.min(w, d);
+  const s = Math.min(1, long / 8, short / 6);
+  const L = 6.5 * s, W = 4.5 * s, H = 1.5 * s, T = 0.3 * s, HB = 3 * s;
+  const total = L + T; // headboard + mattress, centered together along the long axis (local x)
+  const part = (sx, sy, sz, x, y) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), bedMat);
+    m.position.set(x, y + sy / 2, 0);
+    m.raycast = noRaycast;
+    return m;
+  };
+  const bed = new THREE.Group();
+  bed.name = "bed";
+  bed.add(part(L, H, W, -total / 2 + T + L / 2, 0)); // mattress
+  bed.add(part(T, HB, W, -total / 2 + T / 2, 0));    // headboard at the -x short end
+  bed.position.set((bb.min.x + bb.max.x) / 2, bb.min.y, (bb.min.z + bb.max.z) / 2);
+  if (d > w) bed.rotation.y = Math.PI / 2;
+  return bed;
+}
+
+// Roof from root extras (feet): footprint on x∈[0,width], z∈[0,depth]; base at y = floors*floorHeight. Not selectable.
+function makeRoof(extras, floors) {
+  const r = extras.roof, fp = extras.footprint;
+  if (!r || !fp) return null;
+  const o = r.overhang ?? 0, W = fp.width, D = fp.depth, base = floors * (extras.floorHeight ?? 0);
+  let geom;
+  if (r.kind === "gable") {
+    const alongX = r.ridgeAxis === "x";
+    const span = (alongX ? D : W) + 2 * o, len = (alongX ? W : D) + 2 * o, h = r.pitch * span / 2;
+    const tri = new THREE.Shape().moveTo(-span / 2, 0).lineTo(span / 2, 0).lineTo(0, h).closePath();
+    geom = new THREE.ExtrudeGeometry(tri, { depth: len, bevelEnabled: false }); // shape x = across ridge, extrusion z = along ridge
+    if (alongX) geom.rotateY(Math.PI / 2).translate(-o, base, D / 2); // across -> z, along -> x
+    else geom.translate(W / 2, base, -o);
+  } else if (r.kind === "flat") {
+    geom = new THREE.BoxGeometry(W + 2 * o, r.thickness, D + 2 * o).translate(W / 2, base + r.thickness / 2, D / 2);
+  } else return null;
+  const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+    color: ROOF_COLOR, roughness: 0.9, transparent: true, opacity: ROOF_OPACITY, depthWrite: false, side: THREE.DoubleSide }));
+  mesh.name = "roof";
+  mesh.raycast = noRaycast;
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geom), new THREE.LineBasicMaterial({ color: EDGE_COLOR }));
+  edges.raycast = noRaycast;
+  mesh.add(edges);
+  return mesh;
+}
+
+function syncHouse() {
+  if (!spec) return;
+  hSqftEl.value = spec.sqft; hBedsEl.value = spec.bedrooms;
+  hFloorsEl.value = String(spec.floors); hStyleEl.value = spec.style;
+}
+
+function disposeModel() {
+  if (!group) return;
+  scene.remove(group);
+  group.traverse((o) => {
+    o.geometry?.dispose();
+    for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) if (m !== bedMat) m.dispose();
+  });
+  group = null;
+  boxes = [];
+}
+
+function adoptModel(gltf) {
+  disposeModel();
+  group = gltf.scene;
+  const extras = gltf.parser.json.extras ?? gltf.userData ?? {};
+  if (extras.spec) spec = extras.spec;
+  const found = [];
+  group.traverse((o) => { if (o.userData?.id !== undefined && o.userData.kind) found.push(o); });
+  for (const node of found) {
+    const mesh = node.isMesh ? node : node.getObjectByProperty("isMesh", true);
+    if (!mesh) continue;
+    mesh.material = mesh.material.clone(); // per-box material so selection can change opacity
+    Object.assign(mesh.material, { transparent: true, opacity: FACE_OPACITY, depthWrite: false });
+    const edgeMat = new THREE.LineBasicMaterial({ color: EDGE_COLOR });
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), edgeMat);
+    edges.raycast = noRaycast;
+    mesh.add(edges);
+    if (node.userData.kind === "bedroom") mesh.add(makeBed(mesh.geometry));
+    boxes.push({ id: node.userData.id, ud: node.userData, mesh, edgeMat });
+  }
+  const roof = makeRoof(extras, extras.spec?.floors ?? spec?.floors ?? 1);
+  if (roof) group.add(roof);
+  scene.add(group);
+  syncHouse();
+  floorEl.textContent = "";
+  for (let i = 1; i <= (spec?.floors ?? 1); i++) floorEl.add(new Option(`Floor ${i}`, String(i)));
+  if (!boxes.some((b) => b.id === selectedId)) selectedId = null;
+  refresh();
+}
+
+// Sync highlight + top-bar panel with selectedId and the current node values.
+function refresh() {
+  for (const el of houseEls) el.disabled = busy;
+  for (const b of boxes) {
+    const on = b.id === selectedId;
+    b.edgeMat.color.setHex(on ? SELECTED_EDGE_COLOR : EDGE_COLOR);
+    b.mesh.material.opacity = on ? SELECTED_OPACITY : FACE_OPACITY;
+  }
+  const sel = boxes.find((b) => b.id === selectedId);
+  controlsEl.hidden = !sel;
+  labelEl.textContent = sel ? sel.ud.label ?? sel.id : "Click a room";
+  if (!sel) return;
+  sqftEl.value = Math.round(sel.ud.sqft * 10) / 10;
+  floorEl.value = String(sel.ud.level + 1);
+  sqftEl.disabled = floorEl.disabled = sel.ud.kind !== "bedroom" || busy;
+}
+
+function showError(msg) { errEl.textContent = msg ?? ""; }
+
+// ---- selection (click, not drag) ----
+const raycaster = new THREE.Raycaster();
+let down = null;
+renderer.domElement.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 5) { down = null; return; }
+  down = null;
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hit = raycaster.intersectObjects(boxes.map((b) => b.mesh), false)[0];
+  selectedId = hit ? boxes.find((b) => b.mesh === hit.object)?.id ?? null : null;
+  showError("");
+  refresh();
+});
+
+// ---- editing: POST /layout (or in-page layoutToGltf in static mode), swap model ----
+const parseGltf = (json) => new Promise((ok, fail) => new GLTFLoader().parse(JSON.stringify(json), "", ok, fail));
+
+// POST /layout (or call layoutToGltf) and swap the model. Returns true on success; on failure shows the error and returns false.
+async function relayout(nextSpec, nextOverrides, { reframe = false } = {}) {
+  busy = true;
+  refresh();
+  showError("");
+  try {
+    let json;
+    if (globalThis.layoutToGltf) {
+      // Static mode (docs/): layout runs in the page; a thrown Error reads like a 4xx error from the server.
+      json = globalThis.layoutToGltf({ spec: nextSpec, overrides: nextOverrides });
+    } else {
+      const res = await fetch("/layout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spec: nextSpec, overrides: nextOverrides }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json()).error ?? msg; } catch {}
+        throw new Error(msg);
+      }
+      json = await res.json();
+    }
+    const gltf = await parseGltf(json);
+    overrides = gltf.parser.json.extras?.applied ?? nextOverrides;
+    if (reframe) selectedId = null;
+    adoptModel(gltf); // per-room edits keep camera and re-select id if it still exists
+    if (reframe) frame(group);
+    return true;
+  } catch (err) {
+    showError(err?.message ?? String(err));
+    syncHouse(); // revert house fields to the current spec
+    return false;
+  } finally {
+    busy = false;
+    refresh();
+  }
+}
+
+function submitEdit(ev) {
+  const id = selectedId;
+  const sel = boxes.find((b) => b.id === id);
+  const sqft = Number(sqftEl.value), floor = Number(floorEl.value) - 1;
+  if (!sel || busy || sel.ud.kind !== "bedroom") return;
+  if (sqftEl.value === "" || !Number.isFinite(sqft)) { refresh(); return; }
+  // An override pins only the field that changed; keep whatever else was already pinned for this box.
+  const patch = ev?.target === floorEl ? { floor } : { sqft };
+  return relayout(spec, { ...overrides, [id]: { ...overrides[id], ...patch } });
+}
+
+// House-level change: new spec, per-room overrides reset, camera re-framed.
+function submitHouse() {
+  if (busy) return;
+  const next = { sqft: Number(hSqftEl.value), bedrooms: Number(hBedsEl.value), floors: Number(hFloorsEl.value), style: hStyleEl.value };
+  if (hSqftEl.value === "" || hBedsEl.value === "" || !Number.isFinite(next.sqft) || !Number.isFinite(next.bedrooms)) { syncHouse(); return; }
+  return relayout(next, {}, { reframe: true });
+}
+for (const el of houseEls) el.addEventListener("change", submitHouse);
+sqftEl.addEventListener("change", submitEdit);
+floorEl.addEventListener("change", submitEdit);
+
+// ---- initial load ----
+const showInitial = (gltf) => {
+  overrides = gltf.parser.json.extras?.applied ?? {};
+  adoptModel(gltf);
+  frame(group);
+};
+if (globalThis.layoutToGltf) {
+  // Static mode (docs/): compute the default house in the page.
+  try {
+    showInitial(await parseGltf(globalThis.layoutToGltf({ spec: {} })));
+  } catch (err) {
+    showError("Failed to build model: " + (err?.message ?? err));
+  }
+} else {
+  new GLTFLoader().load(
+    "/model.gltf",
+    showInitial,
+    undefined,
+    (err) => {
+      showError("Failed to load /model.gltf: " + (err?.message ?? err));
+    }
+  );
+}
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
