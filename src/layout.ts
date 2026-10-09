@@ -6,6 +6,7 @@ import { parseOverrides, parseSpec, type RawSpec } from './spec.ts';
 export class BadRequestError extends Error {}
 
 const SPEC_FIELDS = ['sqft', 'bedrooms', 'floors'] as const;
+const STRING_FIELDS = ['style'] as const;
 
 export function layoutToGltf(body: unknown): object {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -13,12 +14,19 @@ export function layoutToGltf(body: unknown): object {
   }
   const { spec: rawSpec, overrides: rawOverrides } = body as Record<string, unknown>;
   if (typeof rawSpec !== 'object' || rawSpec === null || Array.isArray(rawSpec)) {
-    throw new BadRequestError('spec must be an object with sqft, bedrooms and optional floors');
+    throw new BadRequestError('spec must be an object with optional sqft, bedrooms, floors and style');
   }
   for (const key of SPEC_FIELDS) {
     const v = (rawSpec as Record<string, unknown>)[key];
     if (v !== undefined && v !== null && typeof v !== 'string' && typeof v !== 'number') {
       throw new BadRequestError(`spec.${key} must be a number (got ${JSON.stringify(v)})`);
+    }
+  }
+
+  for (const key of STRING_FIELDS) {
+    const v = (rawSpec as Record<string, unknown>)[key];
+    if (v !== undefined && v !== null && typeof v !== 'string') {
+      throw new BadRequestError(`spec.${key} must be a string (got ${JSON.stringify(v)})`);
     }
   }
 

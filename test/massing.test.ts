@@ -1,20 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { buildMassing, type Box } from '../src/massing.ts';
-import { parseOverrides, parseSpec, type HouseSpec, type Overrides } from '../src/spec.ts';
+import { parseOverrides, parseSpec, STYLES, type HouseSpec, type Overrides, type Style } from '../src/spec.ts';
 
 const EPS = 1e-6;
 
-const cases = [
-  { sqft: 300, bedrooms: 0, floors: 1 },
-  { sqft: 300, bedrooms: 12, floors: 4 },
-  { sqft: 800, bedrooms: 1, floors: 1 },
-  { sqft: 1200, bedrooms: 2, floors: 1 },
-  { sqft: 1800, bedrooms: 3, floors: 2 },
-  { sqft: 2500, bedrooms: 4, floors: 2 },
-  { sqft: 3000, bedrooms: 5, floors: 3 },
-  { sqft: 6000, bedrooms: 12, floors: 1 },
-  { sqft: 20000, bedrooms: 12, floors: 4 },
-  { sqft: 1000, bedrooms: 12, floors: 1 },
+const cases: HouseSpec[] = [
+  { sqft: 300, bedrooms: 0, floors: 1, style: 'colonial' },
+  { sqft: 300, bedrooms: 12, floors: 4, style: 'colonial' },
+  { sqft: 800, bedrooms: 1, floors: 1, style: 'colonial' },
+  { sqft: 1200, bedrooms: 2, floors: 1, style: 'colonial' },
+  { sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' },
+  { sqft: 2500, bedrooms: 4, floors: 2, style: 'colonial' },
+  { sqft: 3000, bedrooms: 5, floors: 3, style: 'colonial' },
+  { sqft: 6000, bedrooms: 12, floors: 1, style: 'colonial' },
+  { sqft: 20000, bedrooms: 12, floors: 4, style: 'colonial' },
+  { sqft: 1000, bedrooms: 12, floors: 1, style: 'colonial' },
 ];
 
 function overlaps(a: Box, b: Box): boolean {
@@ -35,7 +35,7 @@ describe('buildMassing', () => {
   });
 
   it('footprint uses aspect 1.25 with whole-foot dimensions', () => {
-    const m = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2 });
+    const m = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' });
     const f = m.floors[0]!;
     expect(f.depth).toBe(27);
     expect(f.width).toBe(34);
@@ -43,12 +43,12 @@ describe('buildMassing', () => {
   });
 
   it('bedrooms are 12x12 when they fit, and shrink slightly (>= 10 ft) before overflowing', () => {
-    const roomy = buildMassing({ sqft: 3000, bedrooms: 3, floors: 2 }); // 39 ft wide
+    const roomy = buildMassing({ sqft: 3000, bedrooms: 3, floors: 2, style: 'colonial' }); // 39 ft wide
     for (const b of roomy.floors[1]!.rooms.filter((r) => r.kind === 'bedroom')) {
       expect(b.w).toBe(12);
       expect(b.d).toBe(12);
     }
-    const tight = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2 }); // 34 ft wide, 3 x 12 = 36
+    const tight = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' }); // 34 ft wide, 3 x 12 = 36
     for (const b of tight.floors[1]!.rooms.filter((r) => r.kind === 'bedroom')) {
       expect(b.w).toBeGreaterThanOrEqual(10);
       expect(b.w).toBeLessThan(12);
@@ -58,7 +58,7 @@ describe('buildMassing', () => {
 
   it('overflows bedrooms down when the upper floor is full', () => {
     // 1000 sqft / 2 floors -> 25 x 20 ft per floor -> room for 2 bedrooms per floor
-    const m = buildMassing({ sqft: 1000, bedrooms: 3, floors: 2 });
+    const m = buildMassing({ sqft: 1000, bedrooms: 3, floors: 2, style: 'colonial' });
     const count = (lvl: number) => m.floors[lvl]!.rooms.filter((r) => r.kind === 'bedroom').length;
     expect(m.floors[0]!.width).toBe(25);
     expect(count(1)).toBe(2);
@@ -110,7 +110,7 @@ describe('buildMassing', () => {
   });
 
   it('shrinks bedrooms proportionally when they do not fit along the edge', () => {
-    const m = buildMassing({ sqft: 1000, bedrooms: 12, floors: 1 });
+    const m = buildMassing({ sqft: 1000, bedrooms: 12, floors: 1, style: 'colonial' });
     const beds = m.floors[0]!.rooms.filter((r) => r.kind === 'bedroom');
     expect(beds).toHaveLength(12);
     for (const b of beds) {
@@ -121,22 +121,22 @@ describe('buildMassing', () => {
   });
 
   it('zero bedrooms gives one full-footprint living box per floor', () => {
-    const m = buildMassing({ sqft: 600, bedrooms: 0, floors: 1 });
+    const m = buildMassing({ sqft: 600, bedrooms: 0, floors: 1, style: 'colonial' });
     const [living] = m.floors[0]!.rooms;
     expect(m.floors[0]!.rooms).toHaveLength(1);
     expect(living!.w).toBe(m.floors[0]!.width);
     expect(living!.d).toBe(m.floors[0]!.depth);
   });
 
-  it.each([
-    { sqft: 900, bedrooms: 1, floors: 1 },
-    { sqft: 1000, bedrooms: 3, floors: 2 },
-    { sqft: 5000, bedrooms: 6, floors: 3 },
-    { sqft: 400, bedrooms: 0, floors: 1 },
-    { sqft: 1800, bedrooms: 3, floors: 2 },
-    { sqft: 1200, bedrooms: 2, floors: 1 },
-    { sqft: 1000, bedrooms: 12, floors: 1 },
-    { sqft: 3000, bedrooms: 5, floors: 3 },
+  it.each<HouseSpec>([
+    { sqft: 900, bedrooms: 1, floors: 1, style: 'colonial' },
+    { sqft: 1000, bedrooms: 3, floors: 2, style: 'colonial' },
+    { sqft: 5000, bedrooms: 6, floors: 3, style: 'colonial' },
+    { sqft: 400, bedrooms: 0, floors: 1, style: 'colonial' },
+    { sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' },
+    { sqft: 1200, bedrooms: 2, floors: 1, style: 'colonial' },
+    { sqft: 1000, bedrooms: 12, floors: 1, style: 'colonial' },
+    { sqft: 3000, bedrooms: 5, floors: 3, style: 'colonial' },
   ])('room boxes exactly tile the footprint for %o', (spec) => {
     const m = buildMassing(spec);
     for (const f of m.floors) {
@@ -186,14 +186,14 @@ function expectValidMassing(m: ReturnType<typeof buildMassing>): void {
 
 describe('box ids', () => {
   it('bedrooms are bedroom-N, living is living-<level>[-back], unique per massing', () => {
-    const m = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2 });
+    const m = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' });
     expect(m.floors[0]!.rooms.map((r) => r.id)).toEqual(['living-0']);
     expect(m.floors[1]!.rooms.map((r) => r.id)).toEqual(['bedroom-1', 'bedroom-2', 'bedroom-3', 'living-1', 'living-1-back']);
     for (const spec of cases) expectValidMassing(buildMassing(spec));
   });
 
   it('bedroom numbering is stable regardless of floor', () => {
-    const m = buildMassing({ sqft: 1000, bedrooms: 3, floors: 2 }); // 1 bedroom overflows down
+    const m = buildMassing({ sqft: 1000, bedrooms: 3, floors: 2, style: 'colonial' }); // 1 bedroom overflows down
     expect(bedsOf(m, 0).map((b) => b.id)).toEqual(['bedroom-1']);
     expect(bedsOf(m, 1).map((b) => b.id)).toEqual(['bedroom-2', 'bedroom-3']);
   });
@@ -201,7 +201,7 @@ describe('box ids', () => {
 
 describe('no overrides', () => {
   it('1800/3/2 output is unchanged apart from id/sqft/applied', () => {
-    const m = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2 });
+    const m = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' });
     expect(m.applied).toEqual({});
     expect(m.floors[0]!.rooms).toEqual([
       { id: 'living-0', label: 'Living', kind: 'living', x: 0, y: 0, z: 0, w: 34, d: 27, h: 9, sqft: 918 },
@@ -299,7 +299,7 @@ describe('overrides', () => {
   });
 
   it('bedrooms on a floor share one row depth, flush with the back edge', () => {
-    const m = buildMassing({ sqft: 3000, bedrooms: 3, floors: 2 }, { 'bedroom-1': { sqft: 225 } });
+    const m = buildMassing({ sqft: 3000, bedrooms: 3, floors: 2, style: 'colonial' }, { 'bedroom-1': { sqft: 225 } });
     const beds = bedsOf(m, 1);
     expect(new Set(beds.map((b) => b.d)).size).toBe(1);
     for (const b of beds) expect(b.z + b.d).toBeCloseTo(m.floors[1]!.depth, 6);
@@ -307,7 +307,7 @@ describe('overrides', () => {
   });
 
   it('clamps an oversized request to fit the floor and records the real area', () => {
-    const m = buildMassing({ sqft: 900, bedrooms: 1, floors: 1 }, { 'bedroom-1': { sqft: 5000 } });
+    const m = buildMassing({ sqft: 900, bedrooms: 1, floors: 1, style: 'colonial' }, { 'bedroom-1': { sqft: 5000 } });
     const f = m.floors[0]!;
     const b = f.rooms.find((r) => r.id === 'bedroom-1')!;
     expect(m.applied['bedroom-1']!.sqft).toBeLessThan(5000);
@@ -341,7 +341,7 @@ describe('overrides', () => {
   it('an explicitly placed bedroom never overflows to another floor', () => {
     // 1000 sqft / 2 floors -> 25 ft wide, cap 2 per floor; pin all 3 bedrooms on level 1
     const pin: Overrides = { 'bedroom-1': { floor: 1 }, 'bedroom-2': { floor: 1 }, 'bedroom-3': { floor: 1 } };
-    const m = buildMassing({ sqft: 1000, bedrooms: 3, floors: 2 }, pin);
+    const m = buildMassing({ sqft: 1000, bedrooms: 3, floors: 2, style: 'colonial' }, pin);
     expect(bedsOf(m, 1)).toHaveLength(3);
     expect(bedsOf(m, 0)).toHaveLength(0);
     expect(Object.values(m.applied).every((o) => o.floor === 1)).toBe(true);
@@ -350,7 +350,7 @@ describe('overrides', () => {
 
   it('crowded row with sqft overrides still lands everything and tiles', () => {
     const m = buildMassing(
-      { sqft: 1000, bedrooms: 6, floors: 1 },
+      { sqft: 1000, bedrooms: 6, floors: 1, style: 'colonial' },
       Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [`bedroom-${n}`, { sqft: 400 }])),
     );
     expect(bedsOf(m, 0)).toHaveLength(6);
@@ -383,5 +383,88 @@ describe('overrides', () => {
   it('parseOverrides output feeds buildMassing', () => {
     const o = parseOverrides({ 'bedroom-1': { floor: 0, sqft: 200 } }, spec);
     expect(buildMassing(spec, o).applied['bedroom-1']!.floor).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------------------------
+
+const ASPECTS: Record<Style, number> = { ranch: 2.0, colonial: 1.25, modern: 1.6 };
+
+describe('styles', () => {
+  const sizes = [
+    { sqft: 1200, bedrooms: 2, floors: 1 },
+    { sqft: 1800, bedrooms: 3, floors: 2 },
+    { sqft: 3000, bedrooms: 4, floors: 2 },
+    { sqft: 6000, bedrooms: 6, floors: 3 },
+  ];
+  const styleSizes = STYLES.flatMap((style) => sizes.map((z) => ({ ...z, style })));
+
+  it.each(styleSizes)('footprint aspect matches the style table for %o', (spec) => {
+    const m = buildMassing(spec);
+    const { width, depth } = m.footprint;
+    expect(m.footprint).toEqual({ width: m.floors[0]!.width, depth: m.floors[0]!.depth });
+    expect(Number.isInteger(width) && Number.isInteger(depth)).toBe(true);
+    // whole-foot rounding of depth then width: aspect error is at most ~0.5 ft on width + the depth rounding
+    expect(Math.abs(width - depth * ASPECTS[spec.style])).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(width / depth - ASPECTS[spec.style])).toBeLessThan(0.15);
+    // area stays near sqft / floors
+    const target = spec.sqft / spec.floors;
+    expect(Math.abs(width * depth - target) / target).toBeLessThan(0.15);
+  });
+
+  it('exact footprints for 1800 sqft / 1 floor', () => {
+    const fp = (style: Style) => buildMassing({ sqft: 1800, bedrooms: 3, floors: 1, style }).footprint;
+    expect(fp('ranch')).toEqual({ width: 60, depth: 30 });
+    expect(fp('colonial')).toEqual({ width: 48, depth: 38 });
+    expect(fp('modern')).toEqual({ width: 54, depth: 34 });
+  });
+
+  it('roof params per style', () => {
+    const roof = (style: Style) => buildMassing({ sqft: 1800, bedrooms: 3, floors: 2, style }).roof;
+    expect(roof('ranch')).toEqual({ kind: 'gable', pitch: 4 / 12, overhang: 2, ridgeAxis: 'x', thickness: 0.5 });
+    expect(roof('colonial')).toEqual({ kind: 'gable', pitch: 8 / 12, overhang: 1, ridgeAxis: 'x', thickness: 0.5 });
+    expect(roof('modern')).toEqual({ kind: 'flat', pitch: 0, overhang: 1.5, ridgeAxis: 'x', thickness: 1 });
+  });
+
+  it('ridge runs along the longer footprint axis', () => {
+    for (const spec of styleSizes) {
+      const { roof, footprint } = buildMassing(spec);
+      expect(roof.ridgeAxis).toBe(footprint.width >= footprint.depth ? 'x' : 'z');
+    }
+  });
+
+  it('colonial 1800 / 3 / 2 is geometrically identical to the pre-style output', () => {
+    const m = buildMassing({ sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' });
+    expect(m.floorHeight).toBe(9);
+    expect(m.footprint).toEqual({ width: 34, depth: 27 });
+    expect(m.applied).toEqual({});
+    const strip = (rooms: Box[]) => rooms.map(({ id, x, y, z, w, d, h, sqft }) => ({ id, x, y, z, w, d, h, sqft }));
+    expect(strip(m.floors[0]!.rooms)).toEqual([{ id: 'living-0', x: 0, y: 0, z: 0, w: 34, d: 27, h: 9, sqft: 918 }]);
+    const bed = (n: number, x: number) => ({ id: `bedroom-${n}`, x, y: 9, z: 15.67, w: 11.33, d: 11.33, h: 9, sqft: 128.4 });
+    expect(strip(m.floors[1]!.rooms)).toEqual([
+      bed(1, 0),
+      bed(2, 11.33),
+      bed(3, 22.66),
+      { id: 'living-1', x: 0, y: 9, z: 0, w: 34, d: 15.67, h: 9, sqft: 532.8 },
+      { id: 'living-1-back', x: 33.99, y: 9, z: 15.67, w: m.floors[1]!.rooms[4]!.w, d: 11.33, h: 9, sqft: m.floors[1]!.rooms[4]!.sqft },
+    ]);
+  });
+
+  const allStyleCases = STYLES.flatMap((style) => cases.map((c) => ({ ...c, style })));
+  it.each(allStyleCases)('tiling and overlap invariants hold for %o', (spec) => {
+    const m = buildMassing(spec);
+    expect(m.floors).toHaveLength(spec.floors);
+    expect(m.floors.flatMap((f) => f.rooms).filter((r) => r.kind === 'bedroom')).toHaveLength(spec.bedrooms);
+    expect(m.roof.ridgeAxis).toBe(m.footprint.width >= m.footprint.depth ? 'x' : 'z');
+    expectValidMassing(m);
+  });
+
+  it.each(allStyleCases)('overrides keep the footprint fixed and valid for %o', (spec) => {
+    const o: Overrides = { 'bedroom-1': { floor: 0, sqft: 200 } };
+    const m = buildMassing(spec, spec.bedrooms > 0 ? o : {});
+    expect(m.footprint).toEqual(buildMassing(spec).footprint);
+    expectValidMassing(m);
   });
 });

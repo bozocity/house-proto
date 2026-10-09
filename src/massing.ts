@@ -1,5 +1,5 @@
 // Massing: HouseSpec -> labeled room boxes per floor. Pure geometry, units: feet.
-import type { HouseSpec, Overrides } from './spec.ts';
+import type { HouseSpec, Overrides, Style } from './spec.ts';
 
 export type RoomKind = 'bedroom' | 'living';
 
@@ -27,10 +27,27 @@ export interface Floor {
   rooms: Box[];
 }
 
+/**
+ * Roof description (no geometry here; the viewer builds the roof from it). Units: feet.
+ * gable: pitch = rise/run (4/12 = 0.333); the ridge runs along `ridgeAxis` (the longer footprint axis);
+ * `overhang` = feet beyond the footprint on all sides; `thickness` = roof slab thickness.
+ * flat: pitch 0.
+ */
+export interface RoofSpec {
+  kind: 'gable' | 'flat';
+  pitch: number;
+  overhang: number;
+  ridgeAxis: 'x' | 'z';
+  thickness: number;
+}
+
 export interface Massing {
   spec: HouseSpec;
   floorHeight: number;
   floors: Floor[];
+  roof: RoofSpec;
+  /** Footprint of floors[0]: width along x, depth along z (whole feet). */
+  footprint: { width: number; depth: number };
   /**
    * Overrides as actually used after clamping: for every bedroom that had an override, only the keys
    * the incoming override named (`floor`: level it ended on, `sqft`: area it got). An override pins only
@@ -40,7 +57,19 @@ export interface Massing {
 }
 
 const FLOOR_HEIGHT = 9;
-const ASPECT = 1.25;
+
+/**
+ * Style table: footprint aspect (width / depth) and roof.
+ *   style     aspect  roof    pitch (rise/run)  overhang (ft)  thickness (ft)
+ *   ranch     2.0     gable   4/12              2              0.5
+ *   colonial  1.25    gable   8/12              1              0.5   (the original behavior)
+ *   modern    1.6     flat    0                 1.5            1
+ */
+const STYLE_TABLE: Record<Style, { aspect: number; kind: RoofSpec['kind']; pitch: number; overhang: number; thickness: number }> = {
+  ranch: { aspect: 2.0, kind: 'gable', pitch: 4 / 12, overhang: 2, thickness: 0.5 },
+  colonial: { aspect: 1.25, kind: 'gable', pitch: 8 / 12, overhang: 1, thickness: 0.5 },
+  modern: { aspect: 1.6, kind: 'flat', pitch: 0, overhang: 1.5, thickness: 1 },
+};
 const BEDROOM_SIZE = 12;
 /** Bedrooms may shrink to this size before extras overflow to another floor. */
 const MIN_BEDROOM_SIZE = 10;
@@ -149,8 +178,9 @@ function sizeRow(plans: BedroomPlan[], floorWidth: number, floorDepth: number): 
 
 export function buildMassing(spec: HouseSpec, overrides: Overrides = {}): Massing {
   const area = spec.sqft / spec.floors;
-  const depth = Math.max(1, Math.round(Math.sqrt(area / ASPECT)));
-  const width = Math.max(1, Math.round(depth * ASPECT));
+  const style = STYLE_TABLE[spec.style];
+  const depth = Math.max(1, Math.round(Math.sqrt(area / style.aspect)));
+  const width = Math.max(1, Math.round(depth * style.aspect));
 
   // Resolve overrides per bedroom number (unknown ids ignored; values clamped, never thrown on).
   const fixedLevel = new Map<number, number>();
@@ -255,5 +285,13 @@ export function buildMassing(spec: HouseSpec, overrides: Overrides = {}): Massin
     floors.push({ level, width, depth, elevation, rooms });
   }
 
-  return { spec, floorHeight: FLOOR_HEIGHT, floors, applied };
+  const roof: RoofSpec = {
+    kind: style.kind,
+    pitch: style.pitch,
+    overhang: style.overhang,
+    ridgeAxis: width >= depth ? 'x' : 'z',
+    thickness: style.thickness,
+  };
+
+  return { spec, floorHeight: FLOOR_HEIGHT, floors, applied, roof, footprint: { width, depth } };
 }

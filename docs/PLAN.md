@@ -11,11 +11,12 @@ CLI args  →  HouseSpec  →  Massing  →  glTF file  →  browser viewer (thr
             (validate)    (layout)    (export)       (look / later: interact)
 ```
 
-- **HouseSpec** — the validated input: `{ sqft, bedrooms, floors }` (feet). The
+- **HouseSpec** — the validated input: `{ sqft, bedrooms, floors, style }` (feet). `sqft` (1800),
+  `bedrooms` (3) and `style` (`colonial`) are optional with those defaults. The
   parameter list will grow. Adding a parameter touches spec.ts, massing.ts, and
   the flag table in cli.ts.
 - **Massing** — pure geometry: a footprint per floor plus labeled room boxes
-  (`{ label, x, y, z, w, d, h }`). No walls, doors or roof yet. All layout
+  (`{ label, x, y, z, w, d, h }`). No walls or doors; the roof is only described (`Massing.roof`), not modeled. All layout
   heuristics live here, so they are unit-testable without any 3D code.
 - **Exporter** — Massing → glTF 2.0 JSON (embedded base64 buffer, one mesh
   per box, a color per room type). Nothing but geometry; any viewer can open it.
@@ -25,7 +26,19 @@ CLI args  →  HouseSpec  →  Massing  →  glTF file  →  browser viewer (thr
 
 ## First-cut heuristics (deliberately crude)
 
-- Footprint per floor = `sqft / floors`; aspect 1.25:1, rounded to whole feet.
+- Footprint per floor = `sqft / floors`; aspect (width / depth) set by `style`, rounded to whole feet.
+- Style table (`STYLE_TABLE` in massing.ts). `Massing.roof` (`RoofSpec`) and `Massing.footprint` ({ width, depth } of
+  floor 0) are exported in the glTF root extras next to `spec`, `floorHeight`, `applied`; the file contains no roof
+  geometry, the viewer builds the roof from the extras. Gable: pitch = rise/run, ridge along `ridgeAxis` (the longer
+  footprint axis), overhang in feet beyond the footprint on all sides, `thickness` = roof slab thickness in feet.
+
+  | style    | aspect | roof  | pitch  | overhang | thickness |
+  |----------|--------|-------|--------|----------|-----------|
+  | ranch    | 2.0    | gable | 4/12   | 2 ft     | 0.5 ft    |
+  | colonial | 1.25   | gable | 8/12   | 1 ft     | 0.5 ft    |
+  | modern   | 1.6    | flat  | 0      | 1.5 ft   | 1 ft      |
+
+  Colonial is the original behavior (geometrically unchanged).
 - Floor height 9 ft; floors stack.
 - Bedrooms distributed across floors (upper floors first when `floors > 1`),
   each ~12×12 ft, laid in a row along one edge. Remaining area is
@@ -66,4 +79,4 @@ No framework, no bundler.
 | T3 | `viewer/index.html` + `serve.ts` | T1 |
 | V  | Blind verification of the assembled CLI end-to-end | T2, T3 |
 
-Run (once built): `npm start -- --sqft 1800 --bedrooms 3 --floors 2`
+Run (once built): `npm start -- --sqft 1800 --bedrooms 3 --floors 2 --style ranch` (all flags optional)

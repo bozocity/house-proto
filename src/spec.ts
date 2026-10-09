@@ -1,16 +1,25 @@
 // HouseSpec: the validated input to the pipeline. Units: feet / square feet.
 
+export const STYLES = ['ranch', 'colonial', 'modern'] as const;
+export type Style = typeof STYLES[number];
+
 export interface HouseSpec {
   sqft: number;
   bedrooms: number;
   floors: number;
+  style: Style;
 }
 
 export interface RawSpec {
   sqft?: string | number;
   bedrooms?: string | number;
   floors?: string | number;
+  style?: string;
 }
+
+export const DEFAULT_SQFT = 1800;
+export const DEFAULT_BEDROOMS = 3;
+export const DEFAULT_STYLE: Style = 'colonial';
 
 const SQFT_MIN = 300;
 const SQFT_MAX = 20000;
@@ -42,13 +51,10 @@ function requireInRange(name: string, n: number, min: number, max: number, integ
 }
 
 export function parseSpec(raw: RawSpec): HouseSpec {
-  if (isMissing(raw.sqft)) throw new Error('sqft is required');
-  if (isMissing(raw.bedrooms)) throw new Error('bedrooms is required');
-
-  const sqft = toNumber('sqft', raw.sqft);
+  const sqft = isMissing(raw.sqft) ? DEFAULT_SQFT : toNumber('sqft', raw.sqft);
   requireInRange('sqft', sqft, SQFT_MIN, SQFT_MAX, false);
 
-  const bedrooms = toNumber('bedrooms', raw.bedrooms);
+  const bedrooms = isMissing(raw.bedrooms) ? DEFAULT_BEDROOMS : toNumber('bedrooms', raw.bedrooms);
   requireInRange('bedrooms', bedrooms, BEDROOMS_MIN, BEDROOMS_MAX, true);
 
   let floors: number;
@@ -59,7 +65,16 @@ export function parseSpec(raw: RawSpec): HouseSpec {
     requireInRange('floors', floors, FLOORS_MIN, FLOORS_MAX, true);
   }
 
-  return { sqft, bedrooms, floors };
+  let style: Style = DEFAULT_STYLE;
+  if (!isMissing(raw.style)) {
+    const found = STYLES.find((st) => st === raw.style);
+    if (found === undefined) {
+      throw new Error(`style must be one of ${STYLES.join(', ')} (got ${JSON.stringify(raw.style)})`);
+    }
+    style = found;
+  }
+
+  return { sqft, bedrooms, floors, style };
 }
 
 export interface RoomOverride {

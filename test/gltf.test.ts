@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { toGltf, writeGltf } from '../src/export/gltf.ts';
 import { buildMassing, type Box } from '../src/massing.ts';
-import { parseSpec } from '../src/spec.ts';
+import { parseSpec, STYLES } from '../src/spec.ts';
 
 const specs = [
   { sqft: 1800, bedrooms: 3, floors: 2 },
@@ -14,7 +14,7 @@ const specs = [
 
 interface Gltf {
   asset: { version: string };
-  extras: { spec: unknown; floorHeight: unknown; applied: unknown };
+  extras: { spec: unknown; floorHeight: unknown; applied: unknown; roof: unknown; footprint: unknown };
   scene: number;
   scenes: { nodes: number[] }[];
   nodes: { name: string; mesh: number; translation: number[]; extras: Record<string, unknown> }[];
@@ -130,9 +130,29 @@ describe('toGltf', () => {
     const spec = parseSpec({ sqft: 1800, bedrooms: 3, floors: 2 });
     const massing = buildMassing(spec, { 'bedroom-2': { floor: 0, sqft: 150 } });
     const json = JSON.parse(JSON.stringify(toGltf(massing))) as Gltf;
-    expect(json.extras).toEqual({ spec, floorHeight: massing.floorHeight, applied: massing.applied });
+    expect(json.extras).toEqual({
+      spec,
+      floorHeight: massing.floorHeight,
+      applied: massing.applied,
+      roof: massing.roof,
+      footprint: massing.footprint,
+    });
     expect(Object.keys(json.extras.applied as object)).toEqual(['bedroom-2']);
     expect(build({ sqft: 1200, bedrooms: 0 }).json.extras.applied).toEqual({});
+  });
+
+  it.each(STYLES)('root extras carry roof and footprint for style %s, with no roof geometry', (style) => {
+    const { massing, json, boxes } = build({ sqft: 2400, bedrooms: 4, floors: 2, style });
+    expect(json.extras.spec).toMatchObject({ style });
+    expect(json.extras.roof).toEqual(JSON.parse(JSON.stringify(massing.roof)));
+    expect(json.extras.footprint).toEqual({ width: massing.floors[0]!.width, depth: massing.floors[0]!.depth });
+    expect(json.nodes).toHaveLength(boxes.length); // roof is built by the viewer, not exported
+  });
+
+  it('roof extras differ per style', () => {
+    const roof = (style: 'ranch' | 'modern') => build({ sqft: 1800, bedrooms: 3, style }).json.extras.roof;
+    expect(roof('ranch')).toMatchObject({ kind: 'gable', overhang: 2 });
+    expect(roof('modern')).toMatchObject({ kind: 'flat', pitch: 0, overhang: 1.5, thickness: 1 });
   });
 });
 

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { parseOverrides, parseSpec } from '../src/spec.ts';
+import { parseOverrides, parseSpec, STYLES } from '../src/spec.ts';
 
 describe('parseSpec', () => {
   it('parses numeric strings (CLI input)', () => {
-    expect(parseSpec({ sqft: '1800', bedrooms: '3', floors: '2' })).toEqual({ sqft: 1800, bedrooms: 3, floors: 2 });
+    expect(parseSpec({ sqft: '1800', bedrooms: '3', floors: '2' })).toEqual({ sqft: 1800, bedrooms: 3, floors: 2, style: 'colonial' });
   });
 
   it('accepts numbers', () => {
-    expect(parseSpec({ sqft: 1200, bedrooms: 2, floors: 1 })).toEqual({ sqft: 1200, bedrooms: 2, floors: 1 });
+    expect(parseSpec({ sqft: 1200, bedrooms: 2, floors: 1 })).toEqual({ sqft: 1200, bedrooms: 2, floors: 1, style: 'colonial' });
   });
 
   it('defaults floors to 1 below 2500 sqft', () => {
@@ -24,8 +24,8 @@ describe('parseSpec', () => {
   });
 
   it('accepts boundary values', () => {
-    expect(parseSpec({ sqft: 300, bedrooms: 0, floors: 1 })).toEqual({ sqft: 300, bedrooms: 0, floors: 1 });
-    expect(parseSpec({ sqft: 20000, bedrooms: 12, floors: 4 })).toEqual({ sqft: 20000, bedrooms: 12, floors: 4 });
+    expect(parseSpec({ sqft: 300, bedrooms: 0, floors: 1 })).toEqual({ sqft: 300, bedrooms: 0, floors: 1, style: 'colonial' });
+    expect(parseSpec({ sqft: 20000, bedrooms: 12, floors: 4 })).toEqual({ sqft: 20000, bedrooms: 12, floors: 4, style: 'colonial' });
   });
 
   it('rejects sqft out of range', () => {
@@ -48,8 +48,28 @@ describe('parseSpec', () => {
   it('rejects non-numeric and missing input with readable messages', () => {
     expect(() => parseSpec({ sqft: 'big', bedrooms: 1 })).toThrow(/sqft must be a number/);
     expect(() => parseSpec({ sqft: Infinity, bedrooms: 1 })).toThrow(/sqft must be a number/);
-    expect(() => parseSpec({ bedrooms: 1 })).toThrow(/sqft is required/);
-    expect(() => parseSpec({ sqft: 1000 })).toThrow(/bedrooms is required/);
+  });
+
+  it('defaults sqft to 1800, bedrooms to 3 and style to colonial (empty input)', () => {
+    expect(parseSpec({})).toEqual({ sqft: 1800, bedrooms: 3, floors: 1, style: 'colonial' });
+    expect(parseSpec({ sqft: '', bedrooms: '  ' })).toEqual({ sqft: 1800, bedrooms: 3, floors: 1, style: 'colonial' });
+    expect(parseSpec({ bedrooms: 1 }).sqft).toBe(1800);
+    expect(parseSpec({ sqft: 1000 }).bedrooms).toBe(3);
+  });
+
+  it('still range-checks sqft and bedrooms when provided', () => {
+    expect(() => parseSpec({ sqft: 10 })).toThrow(/sqft must be between/);
+    expect(() => parseSpec({ bedrooms: 99 })).toThrow(/bedrooms must be between/);
+  });
+
+  it('accepts each style', () => {
+    for (const style of STYLES) expect(parseSpec({ style }).style).toBe(style);
+    expect(STYLES).toEqual(['ranch', 'colonial', 'modern']);
+  });
+
+  it('rejects an unknown style with the list of valid ones', () => {
+    expect(() => parseSpec({ style: 'gothic' })).toThrow('style must be one of ranch, colonial, modern (got "gothic")');
+    expect(() => parseSpec({ style: 'Ranch' })).toThrow(/style must be one of/);
   });
 });
 

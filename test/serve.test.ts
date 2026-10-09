@@ -6,7 +6,13 @@ import { join } from 'node:path';
 import { layoutToGltf, serve } from '../src/serve.ts';
 
 interface GltfJson {
-  extras: { spec: unknown; floorHeight: number; applied: Record<string, { floor: number; sqft: number }> };
+  extras: {
+    spec: unknown;
+    floorHeight: number;
+    applied: Record<string, { floor: number; sqft: number }>;
+    roof: { kind: string };
+    footprint: { width: number; depth: number };
+  };
   nodes: unknown[];
 }
 
@@ -37,7 +43,7 @@ describe('POST /layout', () => {
     const json = (await res.json()) as GltfJson;
     const expected = layoutToGltf({ spec, overrides: { 'bedroom-2': { floor: 0, sqft: 150 } } }) as GltfJson;
     expect(json.nodes).toHaveLength(expected.nodes.length);
-    expect(json.extras.spec).toEqual(spec);
+    expect(json.extras.spec).toEqual({ ...spec, style: 'colonial' });
     expect(json.extras.applied['bedroom-2']?.floor).toBe(0);
     expect(json.extras).toEqual(JSON.parse(JSON.stringify(expected.extras)));
   });
@@ -46,6 +52,23 @@ describe('POST /layout', () => {
     const res = await post(JSON.stringify({ spec: { sqft: '1200', bedrooms: '2' } }));
     expect(res.status).toBe(200);
     expect(((await res.json()) as GltfJson).extras.applied).toEqual({});
+  });
+
+  it('applies spec.style and defaults the rest', async () => {
+    const res = await post(JSON.stringify({ spec: { style: 'ranch' } }));
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as GltfJson;
+    expect(json.extras.spec).toEqual({ sqft: 1800, bedrooms: 3, floors: 1, style: 'ranch' });
+    expect(json.extras.roof.kind).toBe('gable');
+    expect(json.extras.footprint).toEqual({ width: 60, depth: 30 });
+  });
+
+  it('400s on an unknown or non-string style', async () => {
+    for (const style of ['gothic', 5]) {
+      const res = await post(JSON.stringify({ spec: { sqft: 1800, bedrooms: 3, style } }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toMatch(/style/);
+    }
   });
 
   it('400s on a bad spec', async () => {

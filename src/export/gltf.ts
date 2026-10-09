@@ -98,7 +98,7 @@ export function toGltf(m: Massing): object {
 
   return {
     asset: { version: '2.0', generator: 'house-proto' },
-    extras: { spec: m.spec, floorHeight: m.floorHeight, applied: m.applied },
+    extras: { spec: m.spec, floorHeight: m.floorHeight, applied: m.applied, roof: m.roof, footprint: m.footprint },
     scene: 0,
     scenes: [{ name: 'House', nodes: nodes.map((_, i) => i) }],
     nodes,

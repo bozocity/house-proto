@@ -1,10 +1,18 @@
 # house-proto
 
-Proof-of-concept CLI: a few numbers in, a rough 3D house massing out.
+Proof-of-concept web tool: a homeowner enters square footage, bedrooms, floors
+and a style, and gets a rough 3D house massing to look at and adjust.
 
 ```bash
 npm install
-npm start -- --sqft 1800 --bedrooms 3 --floors 2
+npm start
+```
+
+That opens the viewer with a default house; change square footage, bedrooms,
+floors and style in the page. Flags also work:
+
+```bash
+npm start -- --sqft 1800 --bedrooms 3 --floors 2 --style ranch
 ```
 
 That writes `out/model.gltf`, starts a local server and opens a three.js

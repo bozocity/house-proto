@@ -6,11 +6,12 @@ import { writeGltf } from './export/gltf.ts';
 import { buildMassing } from './massing.ts';
 import { parseSpec } from './spec.ts';
 
-const USAGE = `Usage: tsx src/cli.ts --sqft <n> --bedrooms <n> [--floors <n>] [--out <dir>] [--no-open]
+const USAGE = `Usage: tsx src/cli.ts [--sqft <n>] [--bedrooms <n>] [--floors <n>] [--style <s>] [--out <dir>] [--no-open]
 
-  --sqft <n>       total square footage (required)
-  --bedrooms <n>   number of bedrooms (required)
+  --sqft <n>       total square footage (default: 1800)
+  --bedrooms <n>   number of bedrooms (default: 3)
   --floors <n>     number of floors (optional; defaults by size)
+  --style <s>      ranch | colonial | modern (default: colonial)
   --out <dir>      output directory (default: out)
   --no-open        write the model only; skip server and browser
   --help           show this help
@@ -22,6 +23,7 @@ async function main(): Promise<void> {
       sqft: { type: 'string' },
       bedrooms: { type: 'string' },
       floors: { type: 'string' },
+      style: { type: 'string' },
       out: { type: 'string', default: 'out' },
       'no-open': { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
@@ -34,7 +36,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const spec = parseSpec({ sqft: values.sqft, bedrooms: values.bedrooms, floors: values.floors });
+  const spec = parseSpec({ sqft: values.sqft, bedrooms: values.bedrooms, floors: values.floors, style: values.style });
   const massing = buildMassing(spec);
   const outDir = resolve(values.out ?? 'out');
   const file = join(outDir, 'model.gltf');
@@ -42,7 +44,7 @@ async function main(): Promise<void> {
 
   const rooms = massing.floors.reduce((n, f) => n + f.rooms.length, 0);
   console.log(
-    `Wrote ${file} (${spec.sqft} sqft, ${spec.bedrooms} bedrooms, ${spec.floors} floors, ${rooms} boxes)`,
+    `Wrote ${file} (${spec.sqft} sqft, ${spec.bedrooms} bedrooms, ${spec.floors} floors, ${spec.style}, ${rooms} boxes)`,
   );
 
   if (values['no-open']) return;

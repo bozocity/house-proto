@@ -10,12 +10,14 @@
   #bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; box-sizing: border-box; padding: 0 16px;
     display: flex; align-items: center; justify-content: space-between; gap: 16px; z-index: 2;
     background: #f7f8fa; border-bottom: 1px solid #d5d9e0; color: #1d2430; font: 14px system-ui, sans-serif; }
-  #sel { display: flex; align-items: center; gap: 8px; }
+  #sel, #house { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
   #label { font-weight: 600; }
-  #sel input, #sel select { font: inherit; padding: 3px 6px; border: 1px solid #b8bec9; border-radius: 4px; background: #fff; }
+  #sel input, #sel select, #house input, #house select { font: inherit; padding: 3px 6px; border: 1px solid #b8bec9; border-radius: 4px; background: #fff; }
   #sel input { width: 80px; }
-  #sel input:disabled, #sel select:disabled { background: #eceef2; color: #667; }
-  #err { color: #b00020; }
+  #h-sqft { width: 80px; }
+  #h-bedrooms { width: 56px; }
+  #house input:disabled, #house select:disabled, #sel input:disabled, #sel select:disabled { background: #eceef2; color: #667; }
+  #err { color: #b00020; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
   #hint { position: fixed; left: 12px; bottom: 10px; color: #667; font: 12px system-ui, sans-serif; pointer-events: none; }
   [hidden] { display: none !important; }
 </style>
@@ -28,7 +30,16 @@
 </head>
 <body>
 <div id="bar">
-  <div id="summary">Loading model…</div>
+  <div id="house">
+    <input id="h-sqft" type="number" step="100" min="300" max="20000" title="Square feet"> sqft
+    <input id="h-bedrooms" type="number" step="1" min="0" max="12" title="Bedrooms"> bed
+    <select id="h-floors" title="Floors">
+      <option value="1">1 floor</option><option value="2">2 floors</option><option value="3">3 floors</option><option value="4">4 floors</option>
+    </select>
+    <select id="h-style" title="Style">
+      <option value="ranch">Ranch</option><option value="colonial">Colonial</option><option value="modern">Modern</option>
+    </select>
+  </div>
   <div id="sel">
     <span id="err"></span>
     <span id="label">Click a room</span>
@@ -45,10 +56,13 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const $ = (id) => document.getElementById(id);
-const summaryEl = $("summary"), errEl = $("err"), labelEl = $("label");
+const hSqftEl = $("h-sqft"), hBedsEl = $("h-bedrooms"), hFloorsEl = $("h-floors"), hStyleEl = $("h-style");
+const houseEls = [hSqftEl, hBedsEl, hFloorsEl, hStyleEl];
+const errEl = $("err"), labelEl = $("label");
 const controlsEl = $("controls"), sqftEl = $("sqft"), floorEl = $("floor");
 
 const FACE_OPACITY = 0.35, SELECTED_OPACITY = 0.55;
+const ROOF_COLOR = 0x6b5d52, ROOF_OPACITY = 0.6;
 const EDGE_COLOR = 0x000000, SELECTED_EDGE_COLOR = 0xff8800;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -117,6 +131,38 @@ function makeBed(geom) {
   return bed;
 }
 
+// Roof from root extras (feet): footprint on x∈[0,width], z∈[0,depth]; base at y = floors*floorHeight. Not selectable.
+function makeRoof(extras, floors) {
+  const r = extras.roof, fp = extras.footprint;
+  if (!r || !fp) return null;
+  const o = r.overhang ?? 0, W = fp.width, D = fp.depth, base = floors * (extras.floorHeight ?? 0);
+  let geom;
+  if (r.kind === "gable") {
+    const alongX = r.ridgeAxis === "x";
+    const span = (alongX ? D : W) + 2 * o, len = (alongX ? W : D) + 2 * o, h = r.pitch * span / 2;
+    const tri = new THREE.Shape().moveTo(-span / 2, 0).lineTo(span / 2, 0).lineTo(0, h).closePath();
+    geom = new THREE.ExtrudeGeometry(tri, { depth: len, bevelEnabled: false }); // shape x = across ridge, extrusion z = along ridge
+    if (alongX) geom.rotateY(Math.PI / 2).translate(-o, base, D / 2); // across -> z, along -> x
+    else geom.translate(W / 2, base, -o);
+  } else if (r.kind === "flat") {
+    geom = new THREE.BoxGeometry(W + 2 * o, r.thickness, D + 2 * o).translate(W / 2, base + r.thickness / 2, D / 2);
+  } else return null;
+  const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+    color: ROOF_COLOR, roughness: 0.9, transparent: true, opacity: ROOF_OPACITY, depthWrite: false, side: THREE.DoubleSide }));
+  mesh.name = "roof";
+  mesh.raycast = noRaycast;
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geom), new THREE.LineBasicMaterial({ color: EDGE_COLOR }));
+  edges.raycast = noRaycast;
+  mesh.add(edges);
+  return mesh;
+}
+
+function syncHouse() {
+  if (!spec) return;
+  hSqftEl.value = spec.sqft; hBedsEl.value = spec.bedrooms;
+  hFloorsEl.value = String(spec.floors); hStyleEl.value = spec.style;
+}
+
 function disposeModel() {
   if (!group) return;
   scene.remove(group);
@@ -147,10 +193,10 @@ function adoptModel(gltf) {
     if (node.userData.kind === "bedroom") mesh.add(makeBed(mesh.geometry));
     boxes.push({ id: node.userData.id, ud: node.userData, mesh, edgeMat });
   }
+  const roof = makeRoof(extras, extras.spec?.floors ?? spec?.floors ?? 1);
+  if (roof) group.add(roof);
   scene.add(group);
-  summaryEl.textContent = spec
-    ? `${spec.sqft} sqft · ${spec.bedrooms} bedroom${spec.bedrooms === 1 ? "" : "s"} · ${spec.floors} floor${spec.floors === 1 ? "" : "s"}`
-    : "No spec in model";
+  syncHouse();
   floorEl.textContent = "";
   for (let i = 1; i <= (spec?.floors ?? 1); i++) floorEl.add(new Option(`Floor ${i}`, String(i)));
   if (!boxes.some((b) => b.id === selectedId)) selectedId = null;
@@ -159,6 +205,7 @@ function adoptModel(gltf) {
 
 // Sync highlight + top-bar panel with selectedId and the current node values.
 function refresh() {
+  for (const el of houseEls) el.disabled = busy;
   for (const b of boxes) {
     const on = b.id === selectedId;
     b.edgeMat.color.setHex(on ? SELECTED_EDGE_COLOR : EDGE_COLOR);
@@ -193,15 +240,8 @@ renderer.domElement.addEventListener("pointerup", (e) => {
 // ---- editing: POST /layout, swap model ----
 const parseGltf = (json) => new Promise((ok, fail) => new GLTFLoader().parse(JSON.stringify(json), "", ok, fail));
 
-async function submitEdit(ev) {
-  const id = selectedId;
-  const sel = boxes.find((b) => b.id === id);
-  const sqft = Number(sqftEl.value), floor = Number(floorEl.value) - 1;
-  if (!sel || busy || sel.ud.kind !== "bedroom") return;
-  if (sqftEl.value === "" || !Number.isFinite(sqft)) { refresh(); return; }
-  // An override pins only the field that changed; keep whatever else was already pinned for this box.
-  const patch = ev?.target === floorEl ? { floor } : { sqft };
-  const next = { ...overrides, [id]: { ...overrides[id], ...patch } };
+// POST /layout and swap the model. Returns true on success; on failure shows the error and returns false.
+async function relayout(nextSpec, nextOverrides, { reframe = false } = {}) {
   busy = true;
   refresh();
   showError("");
@@ -209,7 +249,7 @@ async function submitEdit(ev) {
     const res = await fetch("/layout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ spec, overrides: next }),
+      body: JSON.stringify({ spec: nextSpec, overrides: nextOverrides }),
     });
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
@@ -217,15 +257,40 @@ async function submitEdit(ev) {
       throw new Error(msg);
     }
     const gltf = await parseGltf(await res.json());
-    overrides = gltf.parser.json.extras?.applied ?? next;
-    adoptModel(gltf); // keeps camera, re-selects id if it still exists
+    overrides = gltf.parser.json.extras?.applied ?? nextOverrides;
+    if (reframe) selectedId = null;
+    adoptModel(gltf); // per-room edits keep camera and re-select id if it still exists
+    if (reframe) frame(group);
+    return true;
   } catch (err) {
     showError(err?.message ?? String(err));
+    syncHouse(); // revert house fields to the current spec
+    return false;
   } finally {
     busy = false;
     refresh();
   }
 }
+
+function submitEdit(ev) {
+  const id = selectedId;
+  const sel = boxes.find((b) => b.id === id);
+  const sqft = Number(sqftEl.value), floor = Number(floorEl.value) - 1;
+  if (!sel || busy || sel.ud.kind !== "bedroom") return;
+  if (sqftEl.value === "" || !Number.isFinite(sqft)) { refresh(); return; }
+  // An override pins only the field that changed; keep whatever else was already pinned for this box.
+  const patch = ev?.target === floorEl ? { floor } : { sqft };
+  return relayout(spec, { ...overrides, [id]: { ...overrides[id], ...patch } });
+}
+
+// House-level change: new spec, per-room overrides reset, camera re-framed.
+function submitHouse() {
+  if (busy) return;
+  const next = { sqft: Number(hSqftEl.value), bedrooms: Number(hBedsEl.value), floors: Number(hFloorsEl.value), style: hStyleEl.value };
+  if (hSqftEl.value === "" || hBedsEl.value === "" || !Number.isFinite(next.sqft) || !Number.isFinite(next.bedrooms)) { syncHouse(); return; }
+  return relayout(next, {}, { reframe: true });
+}
+for (const el of houseEls) el.addEventListener("change", submitHouse);
 sqftEl.addEventListener("change", submitEdit);
 floorEl.addEventListener("change", submitEdit);
 
@@ -239,7 +304,6 @@ new GLTFLoader().load(
   },
   undefined,
   (err) => {
-    summaryEl.textContent = "";
     showError("Failed to load /model.gltf: " + (err?.message ?? err));
   }
 );
