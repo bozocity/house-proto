@@ -14,12 +14,17 @@ const specs = [
 
 interface Gltf {
   asset: { version: string };
-  extras: { spec: unknown };
+  extras: { spec: unknown; floorHeight: unknown; applied: unknown };
   scene: number;
   scenes: { nodes: number[] }[];
-  nodes: { name: string; mesh: number; translation: number[] }[];
+  nodes: { name: string; mesh: number; translation: number[]; extras: Record<string, unknown> }[];
   meshes: { primitives: { attributes: Record<string, number>; indices: number; material: number }[] }[];
-  materials: { name: string; alphaMode: string }[];
+  materials: {
+    name: string;
+    alphaMode: string;
+    doubleSided: boolean;
+    pbrMetallicRoughness: { baseColorFactor: number[] };
+  }[];
   accessors: { bufferView: number; count: number; min: number[]; max: number[] }[];
   bufferViews: { buffer: number; byteOffset: number; byteLength: number }[];
   buffers: { byteLength: number; uri: string }[];
@@ -97,8 +102,37 @@ describe('toGltf', () => {
     boxes.forEach((box, i) => {
       const mat = json.materials[json.meshes[i]!.primitives[0]!.material]!;
       expect(mat.name).toBe(box.kind);
-      expect(mat.alphaMode).toBe('OPAQUE');
+      expect(mat.alphaMode).toBe('BLEND');
     });
+  });
+
+  it('makes every material translucent and double-sided', () => {
+    const { json } = build({ sqft: 1800, bedrooms: 3, floors: 2 });
+    expect(json.materials.length).toBeGreaterThan(0);
+    for (const mat of json.materials) {
+      expect(mat.alphaMode).toBe('BLEND');
+      expect(mat.pbrMetallicRoughness.baseColorFactor[3]).toBe(0.35);
+      expect(mat.doubleSided).toBe(true);
+    }
+  });
+
+  it.each(specs)('node extras match the massing boxes for %o', (raw) => {
+    const massing = buildMassing(parseSpec(raw));
+    const expected = massing.floors.flatMap((f) =>
+      f.rooms.map((b) => ({ id: b.id, kind: b.kind, level: f.level, sqft: b.sqft, label: b.label })),
+    );
+    const json = JSON.parse(JSON.stringify(toGltf(massing))) as Gltf;
+    expect(json.nodes.map((n) => n.extras)).toEqual(expected);
+    expect(new Set(expected.map((e) => e.id)).size).toBe(expected.length);
+  });
+
+  it('puts spec, floorHeight and applied overrides in the root extras', () => {
+    const spec = parseSpec({ sqft: 1800, bedrooms: 3, floors: 2 });
+    const massing = buildMassing(spec, { 'bedroom-2': { floor: 0, sqft: 150 } });
+    const json = JSON.parse(JSON.stringify(toGltf(massing))) as Gltf;
+    expect(json.extras).toEqual({ spec, floorHeight: massing.floorHeight, applied: massing.applied });
+    expect(Object.keys(json.extras.applied as object)).toEqual(['bedroom-2']);
+    expect(build({ sqft: 1200, bedrooms: 0 }).json.extras.applied).toEqual({});
   });
 });
 

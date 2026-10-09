@@ -11,8 +11,8 @@ const TRIANGLES = 4;
 
 /** One PBR material per room kind. Order defines material indices. */
 const MATERIALS: { kind: RoomKind; color: [number, number, number, number] }[] = [
-  { kind: 'bedroom', color: [0.45, 0.58, 0.75, 1] },
-  { kind: 'living', color: [0.87, 0.78, 0.62, 1] },
+  { kind: 'bedroom', color: [0.45, 0.58, 0.75, 0.35] },
+  { kind: 'living', color: [0.87, 0.78, 0.62, 0.35] },
 ];
 
 type V3 = [number, number, number];
@@ -33,7 +33,8 @@ const INDEX_BYTES = 36 * 2;
 const BOX_BYTES = POSITION_BYTES + NORMAL_BYTES + INDEX_BYTES; // all 4-byte aligned
 
 export function toGltf(m: Massing): object {
-  const boxes: Box[] = m.floors.flatMap((f) => f.rooms);
+  const placed = m.floors.flatMap((f) => f.rooms.map((box) => ({ box, level: f.level })));
+  const boxes: Box[] = placed.map((p) => p.box);
   const buffer = Buffer.alloc(boxes.length * BOX_BYTES);
 
   const accessors: object[] = [];
@@ -87,12 +88,17 @@ export function toGltf(m: Massing): object {
       name: box.label,
       primitives: [{ attributes: { POSITION: accBase, NORMAL: accBase + 1 }, indices: accBase + 2, material, mode: TRIANGLES }],
     });
-    nodes.push({ name: box.label, mesh: i, translation: [box.x, box.y, box.z] });
+    nodes.push({
+      name: box.label,
+      mesh: i,
+      translation: [box.x, box.y, box.z],
+      extras: { id: box.id, kind: box.kind, level: placed[i]!.level, sqft: box.sqft, label: box.label },
+    });
   });
 
   return {
     asset: { version: '2.0', generator: 'house-proto' },
-    extras: { spec: m.spec },
+    extras: { spec: m.spec, floorHeight: m.floorHeight, applied: m.applied },
     scene: 0,
     scenes: [{ name: 'House', nodes: nodes.map((_, i) => i) }],
     nodes,
@@ -100,7 +106,8 @@ export function toGltf(m: Massing): object {
     materials: MATERIALS.map(({ kind, color }) => ({
       name: kind,
       pbrMetallicRoughness: { baseColorFactor: color, metallicFactor: 0, roughnessFactor: 0.9 },
-      alphaMode: 'OPAQUE',
+      alphaMode: 'BLEND',
+      doubleSided: true,
     })),
     accessors,
     bufferViews,

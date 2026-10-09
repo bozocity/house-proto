@@ -61,3 +61,55 @@ export function parseSpec(raw: RawSpec): HouseSpec {
 
   return { sqft, bedrooms, floors };
 }
+
+export interface RoomOverride {
+  sqft?: number;
+  /** 0-based level. */
+  floor?: number;
+}
+
+/** Keyed by Box.id (currently only `bedroom-N`). */
+export type Overrides = Record<string, RoomOverride>;
+
+const OVERRIDE_SQFT_MIN = 40;
+const OVERRIDE_FIELDS = ['sqft', 'floor'];
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Validates user-supplied room overrides against a spec. Returns a cleaned copy; throws readable errors. */
+export function parseOverrides(raw: unknown, spec: HouseSpec): Overrides {
+  if (raw === undefined || raw === null) return {};
+  if (!isPlainObject(raw)) throw new Error('overrides must be an object keyed by room id');
+
+  const out: Overrides = {};
+  for (const [id, value] of Object.entries(raw)) {
+    const m = /^bedroom-(\d+)$/.exec(id);
+    if (!m) throw new Error(`unknown room id ${JSON.stringify(id)} in overrides (expected bedroom-1..bedroom-${spec.bedrooms})`);
+    const num = Number(m[1]);
+    if (num < 1 || num > spec.bedrooms) {
+      throw new Error(`unknown room id ${JSON.stringify(id)}: this house has ${spec.bedrooms} bedroom(s)`);
+    }
+    if (!isPlainObject(value)) throw new Error(`override for ${id} must be an object`);
+    for (const key of Object.keys(value)) {
+      if (!OVERRIDE_FIELDS.includes(key)) throw new Error(`unknown field ${JSON.stringify(key)} in override for ${id} (allowed: sqft, floor)`);
+    }
+
+    const o: RoomOverride = {};
+    if (value.sqft !== undefined) {
+      const s = value.sqft;
+      if (typeof s !== 'number' || !Number.isFinite(s)) throw new Error(`${id}.sqft must be a number (got ${JSON.stringify(s)})`);
+      requireInRange(`${id}.sqft`, s, OVERRIDE_SQFT_MIN, spec.sqft, false);
+      o.sqft = s;
+    }
+    if (value.floor !== undefined) {
+      const f = value.floor;
+      if (typeof f !== 'number' || !Number.isFinite(f)) throw new Error(`${id}.floor must be a number (got ${JSON.stringify(f)})`);
+      requireInRange(`${id}.floor`, f, 0, spec.floors - 1, true);
+      o.floor = f;
+    }
+    out[id] = o;
+  }
+  return out;
+}

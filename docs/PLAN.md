@@ -30,6 +30,15 @@ CLI args  →  HouseSpec  →  Massing  →  glTF file  →  browser viewer (thr
 - Bedrooms distributed across floors (upper floors first when `floors > 1`),
   each ~12×12 ft, laid in a row along one edge. Remaining area is
   living space, as one or two boxes per floor. Later: bathrooms, kitchen, garage, lot.
+- Every box has a stable `id` (`bedroom-N`, `living-<level>`, `living-<level>-back`) and a `sqft`.
+  `buildMassing(spec, overrides)` accepts per-bedroom `{ floor, sqft }` overrides (validated by
+  `parseOverrides`); the house footprint and the per-floor tiling never change. A pinned bedroom always
+  lands on its floor; the others fill the remaining capacity by the usual rule.
+  An override pins only the fields it names (`applied` echoes only those keys).
+- Sqft override: depth = min(sqrt(sqft), 0.6 x floor depth), width = sqft / row depth; all bedrooms on a floor
+  share one row depth (the deepest request). If the row is too wide it shrinks auto bedrooms first (to 10 ft),
+  then overridden ones, then everything uniformly. `Massing.applied` reports the floor/area each override
+  really got, so a UI can snap its fields.
 
 ## Layout
 

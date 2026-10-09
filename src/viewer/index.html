@@ -7,12 +7,17 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #eef1f5; }
   canvas { display: block; }
-  #info { position: fixed; top: 12px; left: 12px; padding: 10px 14px; border-radius: 6px;
-    background: rgba(255,255,255,.9); color: #1d2430; font: 14px/1.5 system-ui, sans-serif;
-    box-shadow: 0 1px 4px rgba(0,0,0,.2); max-width: 320px; }
-  #info b { font-weight: 600; }
-  #info .hint { margin-top: 6px; color: #667; font-size: 12px; }
-  #info .err { color: #b00020; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; box-sizing: border-box; padding: 0 16px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; z-index: 2;
+    background: #f7f8fa; border-bottom: 1px solid #d5d9e0; color: #1d2430; font: 14px system-ui, sans-serif; }
+  #sel { display: flex; align-items: center; gap: 8px; }
+  #label { font-weight: 600; }
+  #sel input, #sel select { font: inherit; padding: 3px 6px; border: 1px solid #b8bec9; border-radius: 4px; background: #fff; }
+  #sel input { width: 80px; }
+  #sel input:disabled, #sel select:disabled { background: #eceef2; color: #667; }
+  #err { color: #b00020; }
+  #hint { position: fixed; left: 12px; bottom: 10px; color: #667; font: 12px system-ui, sans-serif; pointer-events: none; }
+  [hidden] { display: none !important; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -22,13 +27,30 @@
 </script>
 </head>
 <body>
-<div id="info"><div id="spec">Loading model…</div><div class="hint">drag to orbit · scroll to zoom</div></div>
+<div id="bar">
+  <div id="summary">Loading model…</div>
+  <div id="sel">
+    <span id="err"></span>
+    <span id="label">Click a room</span>
+    <span id="controls" hidden>
+      <input id="sqft" type="number" step="10" min="40" title="Square feet"> sqft
+      <select id="floor" title="Floor"></select>
+    </span>
+  </div>
+</div>
+<div id="hint">drag to orbit · scroll to zoom</div>
 <script type="module">
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-const specEl = document.getElementById("spec");
+const $ = (id) => document.getElementById(id);
+const summaryEl = $("summary"), errEl = $("err"), labelEl = $("label");
+const controlsEl = $("controls"), sqftEl = $("sqft"), floorEl = $("floor");
+
+const FACE_OPACITY = 0.35, SELECTED_OPACITY = 0.55;
+const EDGE_COLOR = 0x000000, SELECTED_EDGE_COLOR = 0xff8800;
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
@@ -61,38 +83,164 @@ function frame(obj) {
   controls.update();
 }
 
-function showSpec(spec) {
-  specEl.textContent = "";
-  if (!spec) { specEl.textContent = "No spec in model"; return; }
-  for (const [label, value] of Object.entries(spec)) {
-    const row = document.createElement("div");
-    const b = document.createElement("b");
-    b.textContent = String(value ?? "?");
-    row.append(label + ": ", b);
-    specEl.appendChild(row);
-  }
+// ---- state ----
+let group = null;          // current model root (gltf.scene)
+let boxes = [];            // [{ id, ud, mesh, edgeMat }]
+let spec = null;           // root extras.spec
+let overrides = {};        // in memory only; replaced by root extras.applied after each layout
+let selectedId = null;
+let busy = false;
+
+const noRaycast = () => {};
+const bedMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.9 }); // opaque, shared, never disposed
+
+// Rough bed: mattress + headboard, centered in the mesh's footprint, resting on its floor, long axis along the longer side.
+function makeBed(geom) {
+  geom.computeBoundingBox();
+  const bb = geom.boundingBox, w = bb.max.x - bb.min.x, d = bb.max.z - bb.min.z;
+  const long = Math.max(w, d), short = Math.min(w, d);
+  const s = Math.min(1, long / 8, short / 6);
+  const L = 6.5 * s, W = 4.5 * s, H = 1.5 * s, T = 0.3 * s, HB = 3 * s;
+  const total = L + T; // headboard + mattress, centered together along the long axis (local x)
+  const part = (sx, sy, sz, x, y) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), bedMat);
+    m.position.set(x, y + sy / 2, 0);
+    m.raycast = noRaycast;
+    return m;
+  };
+  const bed = new THREE.Group();
+  bed.name = "bed";
+  bed.add(part(L, H, W, -total / 2 + T + L / 2, 0)); // mattress
+  bed.add(part(T, HB, W, -total / 2 + T / 2, 0));    // headboard at the -x short end
+  bed.position.set((bb.min.x + bb.max.x) / 2, bb.min.y, (bb.min.z + bb.max.z) / 2);
+  if (d > w) bed.rotation.y = Math.PI / 2;
+  return bed;
 }
 
+function disposeModel() {
+  if (!group) return;
+  scene.remove(group);
+  group.traverse((o) => {
+    o.geometry?.dispose();
+    for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) if (m !== bedMat) m.dispose();
+  });
+  group = null;
+  boxes = [];
+}
+
+function adoptModel(gltf) {
+  disposeModel();
+  group = gltf.scene;
+  const extras = gltf.parser.json.extras ?? gltf.userData ?? {};
+  if (extras.spec) spec = extras.spec;
+  const found = [];
+  group.traverse((o) => { if (o.userData?.id !== undefined && o.userData.kind) found.push(o); });
+  for (const node of found) {
+    const mesh = node.isMesh ? node : node.getObjectByProperty("isMesh", true);
+    if (!mesh) continue;
+    mesh.material = mesh.material.clone(); // per-box material so selection can change opacity
+    Object.assign(mesh.material, { transparent: true, opacity: FACE_OPACITY, depthWrite: false });
+    const edgeMat = new THREE.LineBasicMaterial({ color: EDGE_COLOR });
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), edgeMat);
+    edges.raycast = noRaycast;
+    mesh.add(edges);
+    if (node.userData.kind === "bedroom") mesh.add(makeBed(mesh.geometry));
+    boxes.push({ id: node.userData.id, ud: node.userData, mesh, edgeMat });
+  }
+  scene.add(group);
+  summaryEl.textContent = spec
+    ? `${spec.sqft} sqft · ${spec.bedrooms} bedroom${spec.bedrooms === 1 ? "" : "s"} · ${spec.floors} floor${spec.floors === 1 ? "" : "s"}`
+    : "No spec in model";
+  floorEl.textContent = "";
+  for (let i = 1; i <= (spec?.floors ?? 1); i++) floorEl.add(new Option(`Floor ${i}`, String(i)));
+  if (!boxes.some((b) => b.id === selectedId)) selectedId = null;
+  refresh();
+}
+
+// Sync highlight + top-bar panel with selectedId and the current node values.
+function refresh() {
+  for (const b of boxes) {
+    const on = b.id === selectedId;
+    b.edgeMat.color.setHex(on ? SELECTED_EDGE_COLOR : EDGE_COLOR);
+    b.mesh.material.opacity = on ? SELECTED_OPACITY : FACE_OPACITY;
+  }
+  const sel = boxes.find((b) => b.id === selectedId);
+  controlsEl.hidden = !sel;
+  labelEl.textContent = sel ? sel.ud.label ?? sel.id : "Click a room";
+  if (!sel) return;
+  sqftEl.value = Math.round(sel.ud.sqft * 10) / 10;
+  floorEl.value = String(sel.ud.level + 1);
+  sqftEl.disabled = floorEl.disabled = sel.ud.kind !== "bedroom" || busy;
+}
+
+function showError(msg) { errEl.textContent = msg ?? ""; }
+
+// ---- selection (click, not drag) ----
+const raycaster = new THREE.Raycaster();
+let down = null;
+renderer.domElement.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 5) { down = null; return; }
+  down = null;
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hit = raycaster.intersectObjects(boxes.map((b) => b.mesh), false)[0];
+  selectedId = hit ? boxes.find((b) => b.mesh === hit.object)?.id ?? null : null;
+  showError("");
+  refresh();
+});
+
+// ---- editing: POST /layout, swap model ----
+const parseGltf = (json) => new Promise((ok, fail) => new GLTFLoader().parse(JSON.stringify(json), "", ok, fail));
+
+async function submitEdit(ev) {
+  const id = selectedId;
+  const sel = boxes.find((b) => b.id === id);
+  const sqft = Number(sqftEl.value), floor = Number(floorEl.value) - 1;
+  if (!sel || busy || sel.ud.kind !== "bedroom") return;
+  if (sqftEl.value === "" || !Number.isFinite(sqft)) { refresh(); return; }
+  // An override pins only the field that changed; keep whatever else was already pinned for this box.
+  const patch = ev?.target === floorEl ? { floor } : { sqft };
+  const next = { ...overrides, [id]: { ...overrides[id], ...patch } };
+  busy = true;
+  refresh();
+  showError("");
+  try {
+    const res = await fetch("/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ spec, overrides: next }),
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json()).error ?? msg; } catch {}
+      throw new Error(msg);
+    }
+    const gltf = await parseGltf(await res.json());
+    overrides = gltf.parser.json.extras?.applied ?? next;
+    adoptModel(gltf); // keeps camera, re-selects id if it still exists
+  } catch (err) {
+    showError(err?.message ?? String(err));
+  } finally {
+    busy = false;
+    refresh();
+  }
+}
+sqftEl.addEventListener("change", submitEdit);
+floorEl.addEventListener("change", submitEdit);
+
+// ---- initial load ----
 new GLTFLoader().load(
   "/model.gltf",
   (gltf) => {
-    gltf.scene.traverse((o) => {
-      if (o.isMesh) {
-        o.add(new THREE.LineSegments(new THREE.EdgesGeometry(o.geometry),
-          new THREE.LineBasicMaterial({ color: 0x333333 })));
-      }
-    });
-    scene.add(gltf.scene);
-    showSpec(gltf.parser.json.extras?.spec);
-    frame(gltf.scene);
+    overrides = gltf.parser.json.extras?.applied ?? {};
+    adoptModel(gltf);
+    frame(group);
   },
   undefined,
   (err) => {
-    specEl.textContent = "";
-    const e = document.createElement("div");
-    e.className = "err";
-    e.textContent = "Failed to load /model.gltf: " + (err?.message ?? err);
-    specEl.appendChild(e);
+    summaryEl.textContent = "";
+    showError("Failed to load /model.gltf: " + (err?.message ?? err));
   }
 );
 
